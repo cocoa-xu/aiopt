@@ -1,0 +1,15 @@
+# Throwaway evaluation code — not part of the library
+spike/
+
+# Build output
+build/
+cmake-build-*/
+*.o
+*.a
+*.dylib
+*.so
+
+# Models
+*.gguf
+
+.DS_Store
