@@ -1,8 +1,11 @@
 // A complete aiopt program that does real work: declare the options once, then
 // accept the command line as ordinary prose.
 //
-//   ./imgproc model.gguf "convert ./photos into ./out as jpg at quality 80"
-//   ./imgproc model.gguf "recursively shrink ./assets into ./web, max width 1024"
+//   ./imgproc "convert images from ./photos to ./out as jpg at quality 80"
+//   ./imgproc "recursively shrink ./assets into ./web, max width 1024"
+//
+// The model is chosen when the program is built, not when it is run, so a user
+// never has to know one is involved. See AIOPT_EXAMPLE_MODEL in the CMake file.
 
 #include <aiopt/aiopt.hpp>
 
@@ -11,6 +14,7 @@
 #include "third_party/stb_image_write.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <filesystem>
 #include <iostream>
@@ -26,6 +30,7 @@ namespace {
 enum class Format { png, jpg, bmp };
 
 struct Options {
+    bool help = false;
     bool recursive = false;
     bool dry_run = false;
     bool overwrite = false;
@@ -38,6 +43,7 @@ struct Options {
 };
 
 constexpr auto specification = aiopt::spec<Options>(
+    aiopt::flag(&Options::help, "help", "the request is asking what this program can do, not asking for work"),
     aiopt::flag(&Options::recursive, "recursive", "descend into subdirectories when collecting inputs"),
     aiopt::flag(&Options::dry_run, "dry-run", "report what would happen without writing any file"),
     aiopt::flag(&Options::overwrite, "overwrite", "replace files that already exist in the output directory"),
@@ -184,29 +190,50 @@ void process(const std::filesystem::path& source, const std::filesystem::path& d
 
 } // namespace
 
+#ifndef AIOPT_MODEL_PATH
+#error "AIOPT_MODEL_PATH must be defined by the build; see examples/CMakeLists.txt"
+#endif
+
+const std::array<std::string_view, 3> examples{
+    "convert images from ./photos to ./out as jpg at quality 80",
+    "recursively shrink ./assets to ./web, nothing wider than 1024",
+    "show me what would happen, do not write anything yet",
+};
+
+void print_help() {
+    std::cout << aiopt::render_help(specification.descriptors(), "imgproc",
+                                    "convert and resize images, described in plain language", examples);
+}
+
 int main(int argc, char** argv) {
-    if (argc < 3) {
-        std::cerr << "usage: " << argv[0] << " <model.gguf> <what you want done>\n";
-        return 2;
+    // Asking for nothing is unambiguous, so answer it without loading a model.
+    if (argc < 2) {
+        print_help();
+        return 0;
     }
 
     aiopt::EngineOptions engine;
     engine.threads = 10;
 
-    auto created = aiopt::make_parser(specification, argv[1], engine);
+    auto created = aiopt::make_parser(specification, AIOPT_MODEL_PATH, engine);
     if (!created) {
         std::cerr << "imgproc: " << created.error().detail() << '\n';
         return 1;
     }
     auto parser = std::move(created).value();
 
-    auto outcome = parser.parse(argv[2]);
+    auto outcome = parser.parse(argv[1]);
     if (!outcome) {
         std::cerr << "imgproc: " << outcome.error().detail() << '\n';
         return 1;
     }
 
     const Options& options = outcome->options;
+    if (options.help) {
+        print_help();
+        return 0;
+    }
+
     std::cout << "understood:\n"
               << "  input       " << (options.input.empty() ? "." : options.input) << '\n'
               << "  output      " << (options.output.empty() ? "(unset)" : options.output) << '\n'
