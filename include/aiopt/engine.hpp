@@ -20,6 +20,17 @@ struct EngineOptions {
     bool quiet = true;
 };
 
+// Parsing must be reproducible: the same command line has to resolve the same
+// way every time or scripts break at random, so it samples greedily. Anything
+// whose output is only read by a person can afford to vary.
+struct Sampling {
+    float temperature = 0.0f; // zero picks the most likely token every time
+    float top_p = 0.95f;
+    std::uint32_t seed = LLAMA_DEFAULT_SEED;
+
+    [[nodiscard]] constexpr bool deterministic() const noexcept { return temperature <= 0.0f; }
+};
+
 namespace detail {
 
 struct ModelDeleter {
@@ -89,7 +100,7 @@ public:
 
     // Restricts generation to a GBNF grammar. Without one the model is free to
     // emit any token, which for a small model means mostly invalid answers.
-    [[nodiscard]] Status use_grammar(const std::string& gbnf) {
+    [[nodiscard]] Status use_grammar(const std::string& gbnf, const Sampling& sampling = {}) {
         const llama_vocab* vocab = llama_model_get_vocab(model_.get());
         llama_sampler* grammar = llama_sampler_init_grammar(vocab, gbnf.c_str(), "root");
         if (grammar == nullptr) {
@@ -103,8 +114,16 @@ public:
             return Status::grammar_rejected;
         }
 
+        // The grammar comes first either way, so only tokens it admits are ever
+        // considered by whatever follows.
         llama_sampler_chain_add(chain.get(), grammar);
-        llama_sampler_chain_add(chain.get(), llama_sampler_init_greedy());
+        if (sampling.deterministic()) {
+            llama_sampler_chain_add(chain.get(), llama_sampler_init_greedy());
+        } else {
+            llama_sampler_chain_add(chain.get(), llama_sampler_init_top_p(sampling.top_p, 1));
+            llama_sampler_chain_add(chain.get(), llama_sampler_init_temp(sampling.temperature));
+            llama_sampler_chain_add(chain.get(), llama_sampler_init_dist(sampling.seed));
+        }
         sampler_ = std::move(chain);
         return Status::ok;
     }

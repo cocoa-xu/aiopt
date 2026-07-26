@@ -19,6 +19,7 @@
 #include <filesystem>
 #include <iostream>
 #include <mutex>
+#include <random>
 #include <span>
 #include <cctype>
 #include <cmath>
@@ -373,8 +374,11 @@ int main(int argc, char** argv) {
     const Options& options = outcome->options;
     if (options.help) {
         // The model is already loaded and already knows the options, so let it
-        // write the examples rather than shipping a list that goes stale.
-        auto suggested = parser.suggest();
+        // write the examples rather than shipping a list that goes stale. A
+        // fresh seed each run makes it visible that these are written rather
+        // than recited; parsing keeps its deterministic sampler.
+        std::random_device entropy;
+        auto suggested = parser.suggest(3, aiopt::Sampling{0.9f, 0.95f, entropy()});
         if (suggested && !suggested->empty()) {
             std::vector<std::string_view> examples{suggested->begin(), suggested->end()};
             print_help(examples);

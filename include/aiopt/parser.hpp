@@ -175,8 +175,15 @@ public:
     // specification it parses with. Uses a grammar of its own, since the answer
     // here is prose rather than an options object, and puts the parsing grammar
     // back before returning.
-    [[nodiscard]] Result<std::vector<std::string>> suggest(std::size_t count = 3, int max_tokens = 192) {
-        if (const Status status = engine_.use_grammar(render_suggestions_grammar(count));
+    //
+    // Sampling here is deliberately not greedy: only a person reads these, so
+    // varying the seed gives a different set each time. Parsing is restored to
+    // its deterministic sampler on the way out.
+    [[nodiscard]] Result<std::vector<std::string>> suggest(std::size_t count = 3,
+                                                           const Sampling& sampling = {0.9f, 0.95f,
+                                                                                       LLAMA_DEFAULT_SEED},
+                                                           int max_tokens = 192) {
+        if (const Status status = engine_.use_grammar(render_suggestions_grammar(count), sampling);
             status != Status::ok) {
             return Error{status};
         }
@@ -199,6 +206,13 @@ public:
             at = end + 1;
             if (line.starts_with("- ")) {
                 line.remove_prefix(2);
+            }
+            // A grammar admitting free text also admits the characters a turn
+            // marker is spelled with, and a sampled run will occasionally write
+            // "<|im_end|>" out rather than emitting the token. No usage example
+            // contains "<|", so cutting there costs nothing.
+            if (const std::size_t marker = line.find("<|"); marker != std::string_view::npos) {
+                line = line.substr(0, marker);
             }
             while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) {
                 line.remove_suffix(1);
