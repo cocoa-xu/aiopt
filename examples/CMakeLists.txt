@@ -65,8 +65,20 @@ endif()
 
 find_package(Threads REQUIRED)
 
+# Staged beside the binary so the commands in the README can be run from the
+# build directory without hunting for a picture first.
+add_custom_command(
+    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/example.png
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${CMAKE_CURRENT_SOURCE_DIR}/example.png
+            ${CMAKE_CURRENT_BINARY_DIR}/example.png
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/example.png
+    COMMENT "aiopt: staging example.png"
+    VERBATIM)
+add_custom_target(aiopt_example_image DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/example.png)
+
 add_executable(aiopt_imgproc imgproc.cpp)
-add_dependencies(aiopt_imgproc aiopt_example_model)
+add_dependencies(aiopt_imgproc aiopt_example_model aiopt_example_image)
 target_link_libraries(aiopt_imgproc PRIVATE aiopt::aiopt aiopt_strict aiopt_stb Threads::Threads)
 target_compile_definitions(aiopt_imgproc PRIVATE AIOPT_MODEL_PATH="${_model_final}")
 set_target_properties(aiopt_imgproc PROPERTIES OUTPUT_NAME imgproc)
