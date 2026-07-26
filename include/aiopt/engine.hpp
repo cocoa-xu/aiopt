@@ -30,6 +30,10 @@ struct ContextDeleter {
     void operator()(llama_context* context) const noexcept { llama_free(context); }
 };
 
+struct SamplerDeleter {
+    void operator()(llama_sampler* sampler) const noexcept { llama_sampler_free(sampler); }
+};
+
 // Initialised on first use rather than by a global constructor, so merely
 // linking against this library never runs code before main().
 inline void ensure_backend(bool quiet) {
@@ -83,6 +87,28 @@ public:
         return Engine{std::move(model), std::move(context)};
     }
 
+    // Restricts generation to a GBNF grammar. Without one the model is free to
+    // emit any token, which for a small model means mostly invalid answers.
+    [[nodiscard]] Status use_grammar(const std::string& gbnf) {
+        const llama_vocab* vocab = llama_model_get_vocab(model_.get());
+        llama_sampler* grammar = llama_sampler_init_grammar(vocab, gbnf.c_str(), "root");
+        if (grammar == nullptr) {
+            return Status::grammar_rejected;
+        }
+
+        llama_sampler_chain_params chain_params = llama_sampler_chain_default_params();
+        std::unique_ptr<llama_sampler, detail::SamplerDeleter> chain{llama_sampler_chain_init(chain_params)};
+        if (!chain) {
+            llama_sampler_free(grammar);
+            return Status::grammar_rejected;
+        }
+
+        llama_sampler_chain_add(chain.get(), grammar);
+        llama_sampler_chain_add(chain.get(), llama_sampler_init_greedy());
+        sampler_ = std::move(chain);
+        return Status::ok;
+    }
+
     [[nodiscard]] Status prime(std::string_view prefix) {
         const std::vector<llama_token> tokens = tokenize(prefix, true);
         if (tokens.empty()) {
@@ -109,18 +135,26 @@ public:
 
         const llama_vocab* vocab = llama_model_get_vocab(model_.get());
         const int vocab_size = llama_vocab_n_tokens(vocab);
+        if (sampler_) {
+            llama_sampler_reset(sampler_.get());
+        }
 
         std::string out;
         for (int produced = 0; produced < max_tokens; ++produced) {
-            const float* logits = llama_get_logits_ith(context_.get(), -1);
-            if (logits == nullptr) {
-                return Error{Status::inference_failed};
-            }
-
             llama_token best = 0;
-            for (int token = 1; token < vocab_size; ++token) {
-                if (logits[token] > logits[best]) {
-                    best = token;
+            if (sampler_) {
+                // llama_sampler_sample accepts the token internally, which is
+                // what advances the grammar; accepting again would corrupt it.
+                best = llama_sampler_sample(sampler_.get(), context_.get(), -1);
+            } else {
+                const float* logits = llama_get_logits_ith(context_.get(), -1);
+                if (logits == nullptr) {
+                    return Error{Status::inference_failed};
+                }
+                for (int token = 1; token < vocab_size; ++token) {
+                    if (logits[token] > logits[best]) {
+                        best = token;
+                    }
                 }
             }
             if (llama_vocab_is_eog(vocab, best)) {
@@ -139,6 +173,7 @@ public:
     }
 
     [[nodiscard]] llama_pos prefix_length() const noexcept { return prefix_length_; }
+    [[nodiscard]] const llama_model* model() const noexcept { return model_.get(); }
 
 private:
     Engine(std::unique_ptr<llama_model, detail::ModelDeleter> model,
@@ -188,8 +223,46 @@ private:
 
     std::unique_ptr<llama_model, detail::ModelDeleter> model_;
     std::unique_ptr<llama_context, detail::ContextDeleter> context_;
+    std::unique_ptr<llama_sampler, detail::SamplerDeleter> sampler_;
     llama_pos prefix_length_ = 0;
 };
+
+// Instruction-tuned models expect their own turn markers. Feeding them a bare
+// completion prompt measurably degrades the answer, so the specification goes
+// in a system turn and the command line in a user turn. Returns an empty
+// string when the model carries no template, which leaves the caller on the
+// plain completion path.
+[[nodiscard]] inline std::string apply_chat_template(const llama_model* model, std::string_view system,
+                                                     std::string_view user, bool add_assistant) {
+    const char* chat_template = llama_model_chat_template(model, nullptr);
+    if (chat_template == nullptr) {
+        return {};
+    }
+
+    const std::string system_text{system};
+    const std::string user_text{user};
+
+    std::vector<llama_chat_message> messages;
+    messages.push_back(llama_chat_message{"system", system_text.c_str()});
+    if (!user.empty()) {
+        messages.push_back(llama_chat_message{"user", user_text.c_str()});
+    }
+
+    std::string buffer(2 * (system_text.size() + user_text.size()) + 512, '\0');
+    std::int32_t written =
+        llama_chat_apply_template(chat_template, messages.data(), messages.size(), add_assistant, buffer.data(),
+                                  static_cast<std::int32_t>(buffer.size()));
+    if (written > static_cast<std::int32_t>(buffer.size())) {
+        buffer.resize(static_cast<std::size_t>(written));
+        written = llama_chat_apply_template(chat_template, messages.data(), messages.size(), add_assistant,
+                                            buffer.data(), static_cast<std::int32_t>(buffer.size()));
+    }
+    if (written < 0) {
+        return {};
+    }
+    buffer.resize(static_cast<std::size_t>(written));
+    return buffer;
+}
 
 } // namespace aiopt
 

@@ -3,6 +3,7 @@
 
 #include "aiopt/engine.hpp"
 #include "aiopt/error.hpp"
+#include "aiopt/grammar.hpp"
 #include "aiopt/parser.hpp"
 #include "aiopt/prompt.hpp"
 #include "aiopt/spec.hpp"

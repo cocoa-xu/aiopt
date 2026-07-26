@@ -3,9 +3,11 @@
 
 #include "aiopt/engine.hpp"
 #include "aiopt/error.hpp"
+#include "aiopt/grammar.hpp"
 #include "aiopt/prompt.hpp"
 #include "aiopt/spec.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <string>
 #include <string_view>
@@ -79,16 +81,41 @@ public:
             return engine.error();
         }
 
-        std::string prefix = render_prefix(specification.descriptors());
+        const auto descriptors = specification.descriptors();
+        std::string instructions = render_prefix(descriptors);
         Engine owned = std::move(engine).value();
+
+        if (const Status status = owned.use_grammar(render_grammar(descriptors)); status != Status::ok) {
+            return Error{status};
+        }
+
+        // A chat template is only usable for prefix reuse if the system turn is
+        // a literal prefix of the full exchange. Some templates fold the system
+        // message into the first user turn, which would break that; those fall
+        // back to plain completion.
+        std::string prefix = apply_chat_template(owned.model(), instructions, {}, false);
+        const std::string probe = apply_chat_template(owned.model(), instructions, "probe", true);
+        const bool chat = !prefix.empty() && !probe.empty() && probe.compare(0, prefix.size(), prefix) == 0;
+        if (!chat) {
+            prefix = instructions;
+        }
+
         if (const Status status = owned.prime(prefix); status != Status::ok) {
             return Error{status};
         }
-        return Parser{std::move(specification), std::move(owned), std::move(prefix)};
+        return Parser{std::move(specification), std::move(owned), std::move(prefix), std::move(instructions), chat};
     }
 
     [[nodiscard]] Result<Outcome<target_type>> parse(std::string_view command_line, int max_tokens = 64) {
-        Result<std::string> response = engine_.complete(render_request(command_line), max_tokens);
+        std::string request;
+        if (chat_) {
+            const std::string full = apply_chat_template(engine_.model(), instructions_, command_line, true);
+            request = full.substr(std::min(prefix_.size(), full.size()));
+        } else {
+            request = render_request(command_line);
+        }
+
+        Result<std::string> response = engine_.complete(request, max_tokens);
         if (!response) {
             return response.error();
         }
@@ -108,12 +135,16 @@ public:
     [[nodiscard]] const std::string& prefix() const noexcept { return prefix_; }
 
 private:
-    Parser(SpecType specification, Engine engine, std::string prefix) noexcept
-        : specification_{std::move(specification)}, engine_{std::move(engine)}, prefix_{std::move(prefix)} {}
+    Parser(SpecType specification, Engine engine, std::string prefix, std::string instructions,
+           bool chat) noexcept
+        : specification_{std::move(specification)}, engine_{std::move(engine)}, prefix_{std::move(prefix)},
+          instructions_{std::move(instructions)}, chat_{chat} {}
 
     SpecType specification_;
     Engine engine_;
     std::string prefix_;
+    std::string instructions_;
+    bool chat_ = false;
 };
 
 // Deduces the specification type, so callers never have to spell out

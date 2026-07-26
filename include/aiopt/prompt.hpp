@@ -6,20 +6,34 @@
 #include <span>
 #include <string>
 
+// Define AIOPT_SYSTEM_PROMPT before including this header to replace the
+// standing instructions wholesale; pass an argument to render_prefix to
+// replace them for one call. The option list, worked examples, and answer
+// format are appended either way, since the grammar depends on them.
+#ifndef AIOPT_SYSTEM_PROMPT
+#define AIOPT_SYSTEM_PROMPT                                                              \
+    "You translate a command line into option assignments.\n"                            \
+    "Write one line per option that must change, in the form INDEX=VALUE.\n"             \
+    "Write nothing for options that keep their default.\n"                               \
+    "Booleans use 1 or 0. Copy paths and text exactly as they appear in the input.\n"
+#endif
+
 namespace aiopt {
+
+[[nodiscard]] constexpr std::string_view default_system_prompt() noexcept {
+    return AIOPT_SYSTEM_PROMPT;
+}
 
 // The prompt is split so the prefix stays byte-identical across every
 // invocation of a given program. Only the prefix is worth precomputing a
 // key/value cache for; the request changes with each command line.
-[[nodiscard]] inline std::string render_prefix(std::span<const Descriptor> options) {
+[[nodiscard]] inline std::string render_prefix(std::span<const Descriptor> options,
+                                               std::string_view instructions = default_system_prompt()) {
     std::string out;
-    out.reserve(options.size() * 96 + 512);
+    out.reserve(options.size() * 96 + instructions.size() + 512);
 
-    out += "You translate a command line into option assignments.\n"
-           "Write one line per option that must change, in the form INDEX=VALUE.\n"
-           "Write nothing for options that keep their default.\n"
-           "Booleans use 1 or 0. Copy paths and text exactly as they appear in the input.\n"
-           "\nOptions:\n";
+    out += instructions;
+    out += "\nOptions:\n";
 
     for (std::size_t i = 0; i < options.size(); ++i) {
         const Descriptor& option = options[i];

@@ -16,6 +16,7 @@ enum class Status : std::uint8_t {
     context_creation_failed,
     tokenization_failed,
     inference_failed,
+    grammar_rejected,
     malformed_response,
 };
 
@@ -31,6 +32,8 @@ enum class Status : std::uint8_t {
         return "the prompt could not be tokenised";
     case Status::inference_failed:
         return "inference failed";
+    case Status::grammar_rejected:
+        return "the decoding grammar was rejected by the sampler";
     case Status::malformed_response:
         return "the model produced an assignment the specification rejects";
     }
