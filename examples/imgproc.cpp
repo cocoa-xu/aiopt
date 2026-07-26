@@ -124,8 +124,10 @@ struct Options {
     bool dry_run = false;
     bool overwrite = true;
     bool verbose = true;
+    // Where to write has an obvious default; what to read does not, and guessing
+    // the current directory would quietly work through everything in it.
     std::string input;
-    std::string output;
+    std::string output = ".";
     Format format = Format::png;
     Resize resize;
     int quality = 85;
@@ -404,8 +406,8 @@ int main(int argc, char** argv) {
 
     if (options.verbose) {
     std::cout << "understood:\n"
-              << "  input       " << (options.input.empty() ? "." : options.input) << '\n'
-              << "  output      " << (options.output.empty() ? "(unset)" : options.output) << '\n'
+              << "  input       " << (options.input.empty() ? "(unset)" : options.input) << '\n'
+              << "  output      " << options.output << '\n'
               << "  format      " << extension(options.format).substr(1) << '\n'
               << "  resize      " << describe(options.resize) << '\n'
               << "  quality     " << options.quality << '\n'
@@ -417,13 +419,14 @@ int main(int argc, char** argv) {
               << "  jobs        " << options.jobs << "\n\n";
     }
 
-    if (options.output.empty()) {
-        std::cerr << "imgproc: no output location was named, so there is nothing to write\n";
+    if (options.input.empty()) {
+        std::cerr << "imgproc: name an image or a directory to read, for example\n"
+                  << "  imgproc \"convert ./photos to jpg\"\n";
         return 1;
     }
 
     namespace fs = std::filesystem;
-    const fs::path source_root = options.input.empty() ? fs::path{"."} : fs::path{options.input};
+    const fs::path source_root{options.input};
     const fs::path destination_root{options.output};
 
     std::error_code failure;
@@ -448,6 +451,7 @@ int main(int argc, char** argv) {
 
     std::vector<std::pair<fs::path, fs::path>> work;
     int skipped = 0;
+    int in_place = 0;
     for (const fs::path& file : files) {
         fs::path destination;
         if (destination_is_file) {
@@ -455,6 +459,14 @@ int main(int argc, char** argv) {
         } else {
             destination = destination_root / (one_image ? file.filename() : fs::relative(file, source_root));
             destination.replace_extension(extension(options.format));
+        }
+        // Reading and writing the same file would decode it and encode it again
+        // over itself, which for a lossy format quietly degrades the original.
+        // Both paths default to the current directory, so this is easy to ask
+        // for by accident.
+        if (fs::weakly_canonical(file, failure) == fs::weakly_canonical(destination, failure)) {
+            ++in_place;
+            continue;
         }
         if (!options.overwrite && fs::exists(destination)) {
             ++skipped;
@@ -467,6 +479,9 @@ int main(int argc, char** argv) {
         std::cout << files.size() << " image(s) found, " << work.size() << " to process";
         if (skipped > 0) {
             std::cout << ", " << skipped << " left alone because they already exist";
+        }
+        if (in_place > 0) {
+            std::cout << ", " << in_place << " skipped to avoid writing over the source";
         }
         std::cout << "\n\n";
     }
