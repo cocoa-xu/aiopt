@@ -109,7 +109,10 @@ namespace detail {
     for (std::size_t i = 0; i < count; ++i) {
         out += " item";
     }
-    out += "\nitem ::= \"- \" [^\\n]+ \"\\n\"\n";
+    // Bounded rather than open-ended: an unbounded line lets a sampled run
+    // ramble on inside one example, padding it out with repeated fragments
+    // instead of stopping.
+    out += "\nitem ::= \"- \" [^\\n]{4,110} \"\\n\"\n";
     return out;
 }
 

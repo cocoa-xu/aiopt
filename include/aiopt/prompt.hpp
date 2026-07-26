@@ -64,14 +64,39 @@
     "Never paraphrase and never invent a value.\n"
 #endif
 
+// Governs how a sample of the user's own words decides what language the
+// examples come back in. The pull towards English is strong, because every
+// option name and description above is written in it, so this says plainly
+// that those do not decide the answer.
+#ifndef AIOPT_LANGUAGE_PROMPT
+// Naming particular languages here is a trap: the model latches onto the names
+// in the instruction rather than reading the sample, and answers in whichever
+// was mentioned. The rule has to stay abstract.
+#define AIOPT_LANGUAGE_PROMPT                                                            \
+    "Read the sample below and identify the language and regional variety it is\n"       \
+    "written in. Write every example in that same language and variety. If the\n"        \
+    "sample is in a dialect, answer in that dialect; if you cannot, answer in the\n"     \
+    "standard form of that same language. Never answer in a different language\n"        \
+    "from the sample.\n"                                                                 \
+    "The keys above are named in English because that is how the program was\n"          \
+    "written. That says nothing about which language to answer in; only the\n"           \
+    "sample decides. Keep paths, file names, and format names as they are.\n"            \
+    "The sample is a specimen of language and nothing else. Do not answer it, do\n"      \
+    "not translate it, do not describe it, and do not write examples about it.\n"
+#endif
+
 // Governs the example requests shown in help. Override it to change their
 // flavour, for instance to ask for examples in a particular language.
 #ifndef AIOPT_EXAMPLES_PROMPT
 #define AIOPT_EXAMPLES_PROMPT                                                            \
     "Now write example requests a person could type to run this program.\n"              \
     "Put each on its own line beginning with \"- \".\n"                                  \
-    "Use only the keys listed above, and have each example use a different mix\n"        \
-    "of them. Write natural sentences, not JSON. Keep each under twelve words.\n"
+    "Write a whole sentence of the kind someone would actually say out loud.\n"          \
+    "Never write JSON, never write a list of bare key words, and never write a\n"        \
+    "command line flag: no -h, no --quality, no leading dashes of any kind.\n"           \
+    "Use only the keys listed above, and vary which ones each example uses.\n"           \
+    "Every example must ask for real work. None of them may ask for help.\n"             \
+    "Keep each under fifteen words.\n"
 #endif
 
 namespace aiopt {
@@ -84,15 +109,33 @@ namespace aiopt {
     return AIOPT_EXAMPLES_PROMPT;
 }
 
-[[nodiscard]] inline std::string render_suggestion_request(std::size_t count,
+// Passing the original request along lets the model answer in the language it
+// was asked in, which is not something the author of the program can write out
+// ahead of time.
+[[nodiscard]] inline std::string render_suggestion_request(std::size_t count, std::string_view request = {},
                                                            std::string_view instructions =
                                                                default_examples_prompt()) {
     std::string out;
-    out.reserve(instructions.size() + 64);
+    out.reserve(instructions.size() + request.size() + 128);
+
+    // The sample goes first and the instructions last. Whatever sits closest to
+    // the point of generation pulls hardest, and the sample is a request for
+    // help: left in that position the model answers it, and every example comes
+    // back as another way of asking for help.
+    if (!request.empty()) {
+        out += AIOPT_LANGUAGE_PROMPT;
+        out += "\nSample: ";
+        out += request;
+        out += "\n\n";
+    }
+
     out += instructions;
     out += "Write exactly ";
     out += std::to_string(count);
     out += " of them.\n";
+    if (!request.empty()) {
+        out += "Remember: the language of the sample, but never its content.\n";
+    }
     return out;
 }
 

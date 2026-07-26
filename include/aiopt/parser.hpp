@@ -105,6 +105,19 @@ constexpr void skip_space(std::string_view text, std::size_t& at) noexcept {
     return assignments;
 }
 
+struct Suggestions {
+    std::size_t count = 3;
+    // The request that asked for help. Passing it through is what lets the
+    // examples come back in the language it was written in.
+    std::string_view request;
+    // Warm enough that a fresh seed gives a fresh set, cool enough that it does
+    // not wander off the instructions.
+    Sampling sampling{0.75f, 0.92f, LLAMA_DEFAULT_SEED};
+    int max_tokens = 256;
+    // Retried with a nudged seed when a round yields nothing usable.
+    unsigned attempts = 3;
+};
+
 template <class Target>
 struct Outcome {
     Target options{};
@@ -179,27 +192,51 @@ public:
     // Sampling here is deliberately not greedy: only a person reads these, so
     // varying the seed gives a different set each time. Parsing is restored to
     // its deterministic sampler on the way out.
-    [[nodiscard]] Result<std::vector<std::string>> suggest(std::size_t count = 3,
-                                                           const Sampling& sampling = {0.9f, 0.95f,
-                                                                                       LLAMA_DEFAULT_SEED},
-                                                           int max_tokens = 192) {
-        if (const Status status = engine_.use_grammar(render_suggestions_grammar(count), sampling);
-            status != Status::ok) {
-            return Error{status};
-        }
+    [[nodiscard]] Result<std::vector<std::string>> suggest(const Suggestions& options = {}) {
+        const std::size_t count = std::max<std::size_t>(1, options.count);
+        const std::string body = render_suggestion_request(count, options.request);
+        const std::string grammar = render_suggestions_grammar(count);
 
-        Result<std::string> response = engine_.complete(request_for(render_suggestion_request(count)),
-                                                        max_tokens);
+        std::vector<std::string> examples;
+        Error failure{Status::inference_failed};
+
+        // A request that describes the program in its own words invites the
+        // model to hand it straight back, and everything can be discarded. That
+        // is worth another seed rather than leaving the caller with nothing.
+        for (unsigned attempt = 0; attempt < std::max(1u, options.attempts); ++attempt) {
+            Sampling sampling = options.sampling;
+            if (attempt > 0 && sampling.seed != LLAMA_DEFAULT_SEED) {
+                sampling.seed += attempt;
+            }
+
+            if (const Status status = engine_.use_grammar(grammar, sampling); status != Status::ok) {
+                return Error{status};
+            }
+            Result<std::string> response = engine_.complete(request_for(body), options.max_tokens);
+            if (!response) {
+                failure = response.error();
+                continue;
+            }
+            examples = harvest(std::move(response).value(), options.request);
+            if (!examples.empty()) {
+                break;
+            }
+        }
 
         if (const Status status = engine_.use_grammar(grammar_); status != Status::ok) {
             return Error{status};
         }
-        if (!response) {
-            return response.error();
+        if (examples.empty()) {
+            return failure;
         }
+        return examples;
+    }
 
+    [[nodiscard]] const std::string& prefix() const noexcept { return prefix_; }
+
+private:
+    [[nodiscard]] static std::vector<std::string> harvest(const std::string& text, std::string_view request) {
         std::vector<std::string> examples;
-        const std::string text = std::move(response).value();
         for (std::size_t at = 0; at < text.size();) {
             const std::size_t end = std::min(text.find('\n', at), text.size());
             std::string_view line{text.data() + at, end - at};
@@ -214,19 +251,29 @@ public:
             if (const std::size_t marker = line.find("<|"); marker != std::string_view::npos) {
                 line = line.substr(0, marker);
             }
-            while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) {
+            // A bounded line the model has run out of things to say inside gets
+            // padded with repeated fragments joined by bars. Keep the first.
+            if (const std::size_t bar = line.find(" | "); bar != std::string_view::npos) {
+                line = line.substr(0, bar);
+            }
+            // A bounded line can be cut mid-thought, leaving a dangling
+            // separator or space behind it.
+            while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '|' ||
+                                     line.back() == ',')) {
                 line.remove_suffix(1);
             }
-            if (!line.empty()) {
+            // Told to write in the sample's language, a model will sometimes
+            // simply hand the sample back. An example that repeats the request
+            // teaches a reader nothing.
+            const bool echoes =
+                !request.empty() && (line == request || request.find(line) != std::string_view::npos);
+            if (!line.empty() && !echoes) {
                 examples.emplace_back(line);
             }
         }
         return examples;
     }
 
-    [[nodiscard]] const std::string& prefix() const noexcept { return prefix_; }
-
-private:
     Parser(SpecType specification, Engine engine, std::string prefix, std::string instructions,
            std::string grammar, bool chat) noexcept
         : specification_{std::move(specification)}, engine_{std::move(engine)}, prefix_{std::move(prefix)},

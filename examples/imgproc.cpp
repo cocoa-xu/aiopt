@@ -386,9 +386,13 @@ int main(int argc, char** argv) {
         // write the examples rather than shipping a list that goes stale. A
         // fresh seed each run makes it visible that these are written rather
         // than recited; parsing keeps its deterministic sampler.
+        // The request goes back in so the examples come out in whatever language
+        // it was written in.
         std::random_device entropy;
-        auto suggested = parser.suggest(static_cast<std::size_t>(options.examples),
-                                        aiopt::Sampling{0.9f, 0.95f, entropy()});
+        auto suggested = parser.suggest(aiopt::Suggestions{static_cast<std::size_t>(options.examples),
+                                                           argv[1],
+                                                           {0.75f, 0.92f, entropy()},
+                                                           256});
         if (suggested && !suggested->empty()) {
             std::vector<std::string_view> examples{suggested->begin(), suggested->end()};
             print_help(examples);
