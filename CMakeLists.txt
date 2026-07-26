@@ -14,7 +14,7 @@ option(AIOPT_FETCH_LLAMA "Download llama.cpp when no target is already available
 
 set(AIOPT_LLAMA_SOURCE_DIR "" CACHE PATH
     "Path to an existing llama.cpp checkout; overrides AIOPT_FETCH_LLAMA")
-set(AIOPT_LLAMA_TAG "b8000" CACHE STRING
+set(AIOPT_LLAMA_TAG "b10107" CACHE STRING
     "llama.cpp git tag to fetch when no checkout is supplied")
 
 # ---------------------------------------------------------------------------
