@@ -121,7 +121,7 @@ struct Options {
     bool help = false;
     bool recursive = false;
     bool dry_run = false;
-    bool overwrite = false;
+    bool overwrite = true;
     std::string input;
     std::string output;
     Format format = Format::png;
@@ -135,7 +135,8 @@ constexpr auto specification = aiopt::spec<Options>(
     aiopt::flag(&Options::help, "help", "the request is asking what this program can do, not asking for work"),
     aiopt::flag(&Options::recursive, "recursive", "descend into subdirectories when collecting inputs"),
     aiopt::flag(&Options::dry_run, "dry-run", "report what would happen without writing any file"),
-    aiopt::flag(&Options::overwrite, "overwrite", "replace files that already exist in the output directory"),
+    aiopt::flag(&Options::overwrite, "overwrite",
+                "replace files that already exist; false leaves them and skips that image"),
     // Two paths in one request are easy to confuse, so each description says
     // which side of the operation it is. Descriptions are the prompt here.
     aiopt::path(&Options::input, "input", "source image, or a directory of them, to read"),
@@ -435,7 +436,7 @@ int main(int argc, char** argv) {
 
     std::cout << files.size() << " image(s) found, " << work.size() << " to process";
     if (skipped > 0) {
-        std::cout << ", " << skipped << " already present (pass overwrite to replace)";
+        std::cout << ", " << skipped << " left alone because they already exist";
     }
     std::cout << "\n\n";
 
