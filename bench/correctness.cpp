@@ -102,6 +102,8 @@ int main(int argc, char** argv) {
     Tally overall;
     std::map<std::string_view, Tally> per_field;
     std::map<std::string_view, CategoryScore> per_category;
+    std::map<std::string_view, CategoryScore> per_language;
+    std::map<std::string_view, Tally> language_tally;
     std::vector<double> latencies;
     int exact_matches = 0;
     int rejected_assignments = 0;
@@ -137,17 +139,19 @@ int main(int argc, char** argv) {
             }
 
             Tally& tally = per_field[field.name];
-            tally.gold += gold ? 1 : 0;
-            tally.predicted += predicted ? 1 : 0;
-            tally.true_positive += (gold && predicted && correct) ? 1 : 0;
-            overall.gold += gold ? 1 : 0;
-            overall.predicted += predicted ? 1 : 0;
-            overall.true_positive += (gold && predicted && correct) ? 1 : 0;
+            Tally& language = language_tally[bench::name(testcase.language)];
+            for (Tally* target : {&tally, &language, &overall}) {
+                target->gold += gold ? 1 : 0;
+                target->predicted += predicted ? 1 : 0;
+                target->true_positive += (gold && predicted && correct) ? 1 : 0;
+            }
         }
 
-        CategoryScore& score = per_category[bench::name(testcase.category)];
-        ++score.total;
-        score.exact += exact ? 1 : 0;
+        for (CategoryScore* score : {&per_category[bench::name(testcase.category)],
+                                     &per_language[bench::name(testcase.language)]}) {
+            ++score->total;
+            score->exact += exact ? 1 : 0;
+        }
         exact_matches += exact ? 1 : 0;
 
         if (show_failures && !exact) {
@@ -182,7 +186,14 @@ int main(int argc, char** argv) {
     std::cout << "latency ms       mean " << mean << "   p50 " << percentile(latencies, 0.50) << "   p95 "
               << percentile(latencies, 0.95) << "\n\n";
 
-    std::cout << "by category\n";
+    std::cout << "by language      exact           F1\n";
+    for (const auto& [language, score] : per_language) {
+        std::cout << "  " << std::setw(12) << std::left << language << std::right << score.exact << "/"
+                  << score.total << "  (" << percent(score.exact, score.total) << "%)"
+                  << std::setw(10) << 100.0 * language_tally[language].f1() << "%\n";
+    }
+
+    std::cout << "\nby category\n";
     for (const auto& [category, score] : per_category) {
         std::cout << "  " << std::setw(12) << std::left << category << std::right << score.exact << "/"
                   << score.total << "  (" << percent(score.exact, score.total) << "%)\n";
