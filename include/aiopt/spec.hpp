@@ -13,7 +13,7 @@
 
 namespace aiopt {
 
-enum class Kind : std::uint8_t { boolean, integer, text, path, choice };
+enum class Kind : std::uint8_t { boolean, integer, text, path, choice, custom };
 
 // Type-erased view of one option, used to synthesise the prompt and the
 // decoding grammar. Non-owning: every string_view points at the spec, which
@@ -26,6 +26,11 @@ struct Descriptor {
     std::int64_t maximum = 0;
     const std::string_view* choices = nullptr;
     std::size_t choice_count = 0;
+
+    // Set only for Kind::custom: how the value reads to a person, and the GBNF
+    // rule that admits it. The library does not interpret either.
+    std::string_view syntax;
+    std::string_view grammar;
 
     [[nodiscard]] constexpr bool bounded() const noexcept {
         return kind == Kind::integer && minimum != maximum;
@@ -82,7 +87,7 @@ public:
         : member_{member}, name_{name}, description_{description} {}
 
     [[nodiscard]] constexpr Descriptor describe() const noexcept {
-        return Descriptor{name_, description_, Kind::boolean, 0, 0, nullptr, 0};
+        return Descriptor{name_, description_, Kind::boolean, 0, 0, nullptr, 0, {}, {}};
     }
 
     [[nodiscard]] bool assign(Struct& target, std::string_view value) const noexcept {
@@ -107,7 +112,7 @@ public:
           minimum_{minimum}, maximum_{maximum} {}
 
     [[nodiscard]] constexpr Descriptor describe() const noexcept {
-        return Descriptor{name_, description_, Kind::integer, minimum_, maximum_, nullptr, 0};
+        return Descriptor{name_, description_, Kind::integer, minimum_, maximum_, nullptr, 0, {}, {}};
     }
 
     [[nodiscard]] bool assign(Struct& target, std::string_view value) const noexcept {
@@ -137,7 +142,7 @@ public:
         : member_{member}, name_{name}, description_{description} {}
 
     [[nodiscard]] constexpr Descriptor describe() const noexcept {
-        return Descriptor{name_, description_, TextKind, 0, 0, nullptr, 0};
+        return Descriptor{name_, description_, TextKind, 0, 0, nullptr, 0, {}, {}};
     }
 
     [[nodiscard]] bool assign(Struct& target, std::string_view value) const {
@@ -166,7 +171,7 @@ public:
         : member_{member}, name_{name}, description_{description}, labels_{labels} {}
 
     [[nodiscard]] constexpr Descriptor describe() const noexcept {
-        return Descriptor{name_, description_, Kind::choice, 0, 0, labels_.data(), N};
+        return Descriptor{name_, description_, Kind::choice, 0, 0, labels_.data(), N, {}, {}};
     }
 
     [[nodiscard]] bool assign(Struct& target, std::string_view value) const noexcept {
@@ -184,6 +189,38 @@ private:
     std::string_view name_;
     std::string_view description_;
     std::array<std::string_view, N> labels_;
+};
+
+// An escape hatch for values the library has no business knowing about. The
+// program supplies how the value reads, the grammar that admits it, and the
+// function that turns it into the member's type; aiopt carries all three
+// through to the prompt, the decoder, and the help text without inspecting any
+// of them.
+template <class Struct, class Value>
+class Custom {
+public:
+    using Reader = bool (*)(std::string_view, Value&);
+
+    constexpr Custom(Value Struct::* member, std::string_view name, std::string_view description,
+                     std::string_view syntax, std::string_view grammar, Reader reader) noexcept
+        : member_{member}, name_{name}, description_{description}, syntax_{syntax}, grammar_{grammar},
+          reader_{reader} {}
+
+    [[nodiscard]] constexpr Descriptor describe() const noexcept {
+        return Descriptor{name_, description_, Kind::custom, 0, 0, nullptr, 0, syntax_, grammar_};
+    }
+
+    [[nodiscard]] bool assign(Struct& target, std::string_view value) const {
+        return reader_(value, target.*member_);
+    }
+
+private:
+    Value Struct::* member_;
+    std::string_view name_;
+    std::string_view description_;
+    std::string_view syntax_;
+    std::string_view grammar_;
+    Reader reader_;
 };
 
 template <class Struct, class... Options>
@@ -264,6 +301,14 @@ template <class Struct, class Enum, class... Labels>
                                     Labels... labels) noexcept {
     return Choice<Struct, Enum, sizeof...(Labels)>{
         member, name, description, std::array<std::string_view, sizeof...(Labels)>{std::string_view{labels}...}};
+}
+
+template <class Struct, class Value>
+[[nodiscard]] constexpr auto custom(Value Struct::* member, std::string_view name,
+                                    std::string_view description, std::string_view syntax,
+                                    std::string_view grammar,
+                                    bool (*reader)(std::string_view, Value&)) noexcept {
+    return Custom<Struct, Value>{member, name, description, syntax, grammar, reader};
 }
 
 template <class Struct, class... Options>

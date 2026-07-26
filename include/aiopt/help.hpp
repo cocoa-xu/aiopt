@@ -33,6 +33,8 @@ namespace detail {
         }
         return out;
     }
+    case Kind::custom:
+        return std::string{option.syntax};
     }
     return {};
 }

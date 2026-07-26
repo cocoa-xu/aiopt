@@ -51,6 +51,13 @@
     "leave the key out.\n"
 #endif
 
+#ifndef AIOPT_GUIDANCE_CUSTOM
+#define AIOPT_GUIDANCE_CUSTOM                                                            \
+    "Some keys accept a value written in a particular form, which is spelled out\n"      \
+    "beside the key. Use that form exactly, as a quoted string, and take the\n"          \
+    "numbers in it from the request.\n"
+#endif
+
 #ifndef AIOPT_GUIDANCE_TEXT
 #define AIOPT_GUIDANCE_TEXT                                                              \
     "Text keys take words that already appear in the request, copied exactly.\n"         \
@@ -119,6 +126,9 @@ inline void describe_type(std::string& out, const Descriptor& option) {
             out += '"';
         }
         break;
+    case Kind::custom:
+        out += option.syntax;
+        break;
     }
 }
 
@@ -132,6 +142,8 @@ inline void describe_type(std::string& out, const Descriptor& option) {
         return AIOPT_GUIDANCE_CHOICE;
     case Kind::path:
         return AIOPT_GUIDANCE_PATH;
+    case Kind::custom:
+        return AIOPT_GUIDANCE_CUSTOM;
     case Kind::text:
         return AIOPT_GUIDANCE_TEXT;
     }
@@ -139,7 +151,8 @@ inline void describe_type(std::string& out, const Descriptor& option) {
 }
 
 inline void append_guidance(std::string& out, std::span<const Descriptor> options) {
-    constexpr std::array order{Kind::boolean, Kind::integer, Kind::choice, Kind::path, Kind::text};
+    constexpr std::array order{Kind::boolean, Kind::integer, Kind::choice,
+                               Kind::path,    Kind::text,    Kind::custom};
     bool heading = false;
 
     for (const Kind kind : order) {

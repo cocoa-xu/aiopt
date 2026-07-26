@@ -92,6 +92,9 @@ namespace detail {
         case Kind::path:
             out += "\"\\\"\" [^\"\\n]+ \"\\\"\"";
             break;
+        case Kind::custom:
+            out += option.grammar;
+            break;
         }
         out += " ws\n";
     }

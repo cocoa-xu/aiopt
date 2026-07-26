@@ -21,6 +21,7 @@
 #include <mutex>
 #include <span>
 #include <cctype>
+#include <cmath>
 #include <string>
 #include <thread>
 #include <utility>
@@ -30,6 +31,92 @@ namespace {
 
 enum class Format { png, jpg, bmp };
 
+// A resize is not a number, a string, or a choice, so it is declared with its
+// own syntax, its own grammar rule, and its own reader. aiopt carries all three
+// through without knowing what any of it means.
+struct Resize {
+    enum class Mode : std::uint8_t { unchanged, scale, exact };
+
+    Mode mode = Mode::unchanged;
+    double factor = 1.0;
+    int width = 0;
+    int height = 0;
+};
+
+constexpr std::string_view resize_syntax = R"(a string like "50%", "0.5", or "1920x1080")";
+
+// Written as a GBNF value rule, quotes included, because the value travels as a
+// JSON string: 50% and 1920x1080 are not JSON numbers.
+constexpr std::string_view resize_grammar =
+    R"(  "\"" ( [0-9]+ "%" | [0-9]* "." [0-9]+ | [0-9]+ "x" [0-9]+ ) "\"")";
+
+[[nodiscard]] bool read_number(std::string_view text, long& out) noexcept {
+    if (text.empty()) {
+        return false;
+    }
+    out = 0;
+    for (const char digit : text) {
+        if (digit < '0' || digit > '9') {
+            return false;
+        }
+        out = out * 10 + (digit - '0');
+    }
+    return true;
+}
+
+[[nodiscard]] bool read_resize(std::string_view text, Resize& out) {
+    while (!text.empty() && (text.front() == ' ' || text.back() == ' ')) {
+        text.front() == ' ' ? text.remove_prefix(1) : text.remove_suffix(1);
+    }
+    if (text.empty()) {
+        return false;
+    }
+
+    if (const std::size_t cross = text.find_first_of("xX"); cross != std::string_view::npos) {
+        long width = 0;
+        long height = 0;
+        if (!read_number(text.substr(0, cross), width) || !read_number(text.substr(cross + 1), height)) {
+            return false;
+        }
+        if (width <= 0 || height <= 0 || width > 16384 || height > 16384) {
+            return false;
+        }
+        out = Resize{Resize::Mode::exact, 1.0, static_cast<int>(width), static_cast<int>(height)};
+        return true;
+    }
+
+    double factor = 0.0;
+    if (text.back() == '%') {
+        long percent = 0;
+        if (!read_number(text.substr(0, text.size() - 1), percent)) {
+            return false;
+        }
+        factor = static_cast<double>(percent) / 100.0;
+    } else {
+        const std::size_t dot = text.find('.');
+        if (dot == std::string_view::npos) {
+            return false;
+        }
+        long whole = 0;
+        long fraction = 0;
+        const std::string_view digits = text.substr(dot + 1);
+        if (!(dot == 0 || read_number(text.substr(0, dot), whole)) || !read_number(digits, fraction)) {
+            return false;
+        }
+        double scale = 1.0;
+        for (std::size_t i = 0; i < digits.size(); ++i) {
+            scale *= 10.0;
+        }
+        factor = static_cast<double>(whole) + static_cast<double>(fraction) / scale;
+    }
+
+    if (factor <= 0.0 || factor > 64.0) {
+        return false;
+    }
+    out = Resize{Resize::Mode::scale, factor, 0, 0};
+    return true;
+}
+
 struct Options {
     bool help = false;
     bool recursive = false;
@@ -38,6 +125,7 @@ struct Options {
     std::string input;
     std::string output;
     Format format = Format::png;
+    Resize resize;
     int quality = 85;
     int max_width = 0;
     int jobs = 1;
@@ -54,8 +142,24 @@ constexpr auto specification = aiopt::spec<Options>(
     aiopt::path(&Options::output, "output", "destination file or directory to write the results to"),
     aiopt::choice(&Options::format, "format", "output encoding", "png", "jpg", "bmp"),
     aiopt::number(&Options::quality, "quality", "JPEG compression quality, higher means larger files", 1, 100),
-    aiopt::number(&Options::max_width, "max-width", "downscale images wider than this many pixels", 0, 16384),
+    aiopt::custom(&Options::resize, "resize", "scale every image by a factor or to exact pixels",
+                  resize_syntax, resize_grammar, read_resize),
+    aiopt::number(&Options::max_width, "max-width",
+                  "shrink only images wider than this, keeping their shape; ignored when resize is set", 0,
+                  16384),
     aiopt::number(&Options::jobs, "jobs", "number of images to process at once", 1, 64));
+
+[[nodiscard]] std::string describe(const Resize& resize) {
+    switch (resize.mode) {
+    case Resize::Mode::scale:
+        return std::to_string(std::lround(resize.factor * 100.0)) + "%";
+    case Resize::Mode::exact:
+        return std::to_string(resize.width) + "x" + std::to_string(resize.height);
+    case Resize::Mode::unchanged:
+        break;
+    }
+    return "unchanged";
+}
 
 constexpr std::string_view extension(Format format) noexcept {
     switch (format) {
@@ -175,9 +279,27 @@ void process(const std::filesystem::path& source, const std::filesystem::path& d
         return;
     }
 
-    if (options.max_width > 0 && width > options.max_width) {
-        const int scaled_width = options.max_width;
-        const int scaled_height = std::max(1, height * scaled_width / width);
+    // An explicit resize wins over max-width, which is only a ceiling.
+    int scaled_width = width;
+    int scaled_height = height;
+    switch (options.resize.mode) {
+    case Resize::Mode::exact:
+        scaled_width = options.resize.width;
+        scaled_height = options.resize.height;
+        break;
+    case Resize::Mode::scale:
+        scaled_width = std::max(1, static_cast<int>(std::lround(width * options.resize.factor)));
+        scaled_height = std::max(1, static_cast<int>(std::lround(height * options.resize.factor)));
+        break;
+    case Resize::Mode::unchanged:
+        if (options.max_width > 0 && width > options.max_width) {
+            scaled_width = options.max_width;
+            scaled_height = std::max(1, height * scaled_width / width);
+        }
+        break;
+    }
+
+    if (scaled_width != width || scaled_height != height) {
         Pixels scaled{stbir_resize_uint8_srgb(pixels.data(), width, height, 0, nullptr, scaled_width,
                                               scaled_height, 0, STBIR_RGBA),
                       scaled_width, scaled_height};
@@ -258,6 +380,7 @@ int main(int argc, char** argv) {
               << "  input       " << (options.input.empty() ? "." : options.input) << '\n'
               << "  output      " << (options.output.empty() ? "(unset)" : options.output) << '\n'
               << "  format      " << extension(options.format).substr(1) << '\n'
+              << "  resize      " << describe(options.resize) << '\n'
               << "  quality     " << options.quality << '\n'
               << "  max-width   " << (options.max_width == 0 ? "unchanged" : std::to_string(options.max_width))
               << '\n'
