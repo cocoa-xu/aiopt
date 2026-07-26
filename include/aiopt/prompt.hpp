@@ -3,6 +3,8 @@
 
 #include "aiopt/spec.hpp"
 
+#include <algorithm>
+#include <array>
 #include <span>
 #include <string>
 
@@ -15,7 +17,44 @@
     "You turn a request written in prose into a JSON object of command line options.\n"  \
     "Reply with one JSON object and nothing else.\n"                                     \
     "Include a key only when the request asks for it. Omit every other key.\n"           \
-    "Most requests set one or two options. Copy paths and text exactly.\n"
+    "Most requests set one or two options.\n"
+#endif
+
+// A declared type is information the caller already gave us, and stating it
+// plainly costs a few tokens while removing a whole class of guesswork. Each
+// block is emitted only when the specification actually uses that type, so a
+// program with no paths never pays for the paragraph about paths.
+#ifndef AIOPT_GUIDANCE_BOOLEAN
+#define AIOPT_GUIDANCE_BOOLEAN                                                           \
+    "Boolean keys take true or false, never a string and never a number.\n"              \
+    "If the request does not ask about one, leave the key out entirely.\n"
+#endif
+
+#ifndef AIOPT_GUIDANCE_INTEGER
+#define AIOPT_GUIDANCE_INTEGER                                                           \
+    "Number keys take bare digits, not a quoted string, and must fall inside the\n"      \
+    "range shown. Take the number from the request; never invent or round one.\n"
+#endif
+
+#ifndef AIOPT_GUIDANCE_CHOICE
+#define AIOPT_GUIDANCE_CHOICE                                                            \
+    "Choice keys take exactly one of the listed values, spelled exactly as listed.\n"     \
+    "If the request does not clearly point at one of them, leave the key out.\n"
+#endif
+
+#ifndef AIOPT_GUIDANCE_PATH
+#define AIOPT_GUIDANCE_PATH                                                              \
+    "Path keys take a path that already appears in the request. Copy it character\n"     \
+    "for character, keeping any leading ./ or ../ or ~/ exactly as written. Never\n"     \
+    "invent a path, never expand one into an absolute path such as /home/... or\n"       \
+    "/tmp/..., and never complete a partial one. If the request names no path,\n"        \
+    "leave the key out.\n"
+#endif
+
+#ifndef AIOPT_GUIDANCE_TEXT
+#define AIOPT_GUIDANCE_TEXT                                                              \
+    "Text keys take words that already appear in the request, copied exactly.\n"         \
+    "Never paraphrase and never invent a value.\n"
 #endif
 
 namespace aiopt {
@@ -57,6 +96,40 @@ inline void describe_type(std::string& out, const Descriptor& option) {
     }
 }
 
+[[nodiscard]] constexpr std::string_view guidance_for(Kind kind) noexcept {
+    switch (kind) {
+    case Kind::boolean:
+        return AIOPT_GUIDANCE_BOOLEAN;
+    case Kind::integer:
+        return AIOPT_GUIDANCE_INTEGER;
+    case Kind::choice:
+        return AIOPT_GUIDANCE_CHOICE;
+    case Kind::path:
+        return AIOPT_GUIDANCE_PATH;
+    case Kind::text:
+        return AIOPT_GUIDANCE_TEXT;
+    }
+    return {};
+}
+
+inline void append_guidance(std::string& out, std::span<const Descriptor> options) {
+    constexpr std::array order{Kind::boolean, Kind::integer, Kind::choice, Kind::path, Kind::text};
+    bool heading = false;
+
+    for (const Kind kind : order) {
+        const bool used = std::any_of(options.begin(), options.end(),
+                                      [kind](const Descriptor& option) { return option.kind == kind; });
+        if (!used) {
+            continue;
+        }
+        if (!heading) {
+            out += "\nRules:\n";
+            heading = true;
+        }
+        out += guidance_for(kind);
+    }
+}
+
 } // namespace detail
 
 // The prompt is split so the prefix stays byte-identical across every
@@ -78,6 +151,8 @@ inline void describe_type(std::string& out, const Descriptor& option) {
         out += option.description;
         out += '\n';
     }
+
+    detail::append_guidance(out, options);
 
     // Worked examples are built from this specification's own key names, so the
     // shape of a correct answer is never described in the abstract.

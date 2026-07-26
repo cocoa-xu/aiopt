@@ -77,11 +77,14 @@ int main(int argc, char** argv) {
 
     std::int32_t threads = 10;
     bool show_failures = false;
+    bool trace = false;
     for (int i = 2; i < argc; ++i) {
         if (std::strcmp(argv[i], "--threads") == 0 && i + 1 < argc) {
             threads = static_cast<std::int32_t>(std::atoi(argv[++i]));
         } else if (std::strcmp(argv[i], "--show-failures") == 0) {
             show_failures = true;
+        } else if (std::strcmp(argv[i], "--trace") == 0) {
+            trace = true;
         }
     }
 
@@ -116,6 +119,9 @@ int main(int argc, char** argv) {
         }
 
         const bench::Options& actual = outcome->options;
+        if (trace) {
+            std::cerr << "TRACE\t" << testcase.utterance << "\t" << escape(outcome->response) << "\n";
+        }
         rejected_assignments += outcome->rejected;
         if (outcome->accepted == 0 && outcome->rejected == 0) {
             ++empty_responses;
