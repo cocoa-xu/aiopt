@@ -50,8 +50,8 @@ constexpr auto specification = aiopt::spec<Options>(
     aiopt::flag(&Options::overwrite, "overwrite", "replace files that already exist in the output directory"),
     // Two paths in one request are easy to confuse, so each description says
     // which side of the operation it is. Descriptions are the prompt here.
-    aiopt::path(&Options::input, "input", "source directory the images are read from"),
-    aiopt::path(&Options::output, "output", "destination directory the results are written to"),
+    aiopt::path(&Options::input, "input", "source image, or a directory of them, to read"),
+    aiopt::path(&Options::output, "output", "destination file or directory to write the results to"),
     aiopt::choice(&Options::format, "format", "output encoding", "png", "jpg", "bmp"),
     aiopt::number(&Options::quality, "quality", "JPEG compression quality, higher means larger files", 1, 100),
     aiopt::number(&Options::max_width, "max-width", "downscale images wider than this many pixels", 0, 16384),
@@ -77,10 +77,19 @@ constexpr std::string_view extension(Format format) noexcept {
     return std::find(known.begin(), known.end(), suffix) != known.end();
 }
 
+// A request may name one image or a directory of them. Both are ordinary things
+// to ask for, so both are accepted.
 [[nodiscard]] std::vector<std::filesystem::path> collect(const std::filesystem::path& root, bool recursive) {
     namespace fs = std::filesystem;
     std::vector<fs::path> files;
     std::error_code failure;
+
+    if (fs::is_regular_file(root, failure)) {
+        if (loadable(root)) {
+            files.push_back(root);
+        }
+        return files;
+    }
 
     const auto consider = [&files](const fs::directory_entry& entry) {
         if (entry.is_regular_file() && loadable(entry.path())) {
@@ -258,7 +267,7 @@ int main(int argc, char** argv) {
               << "  jobs        " << options.jobs << "\n\n";
 
     if (options.output.empty()) {
-        std::cerr << "imgproc: no output directory was named, so there is nothing to write\n";
+        std::cerr << "imgproc: no output location was named, so there is nothing to write\n";
         return 1;
     }
 
@@ -266,23 +275,34 @@ int main(int argc, char** argv) {
     const fs::path source_root = options.input.empty() ? fs::path{"."} : fs::path{options.input};
     const fs::path destination_root{options.output};
 
-    if (!fs::is_directory(source_root)) {
-        std::cerr << "imgproc: " << source_root.string() << " is not a directory\n";
+    std::error_code failure;
+    const bool one_image = fs::is_regular_file(source_root, failure);
+    if (!one_image && !fs::is_directory(source_root, failure)) {
+        std::cerr << "imgproc: there is no file or directory at " << source_root.string() << '\n';
         return 1;
     }
 
     const std::vector<fs::path> files = collect(source_root, options.recursive);
     if (files.empty()) {
-        std::cout << "no images found under " << source_root.string() << '\n';
-        return 0;
+        std::cout << (one_image ? "not an image this program can read: " : "no images found under ")
+                  << source_root.string() << '\n';
+        return one_image ? 1 : 0;
     }
+
+    // An output carrying an extension names a file rather than a directory,
+    // which only means anything when a single image is being converted.
+    const bool destination_is_file = one_image && !destination_root.extension().empty();
 
     std::vector<std::pair<fs::path, fs::path>> work;
     int skipped = 0;
     for (const fs::path& file : files) {
-        const fs::path relative = fs::relative(file, source_root);
-        fs::path destination = destination_root / relative;
-        destination.replace_extension(extension(options.format));
+        fs::path destination;
+        if (destination_is_file) {
+            destination = destination_root;
+        } else {
+            destination = destination_root / (one_image ? file.filename() : fs::relative(file, source_root));
+            destination.replace_extension(extension(options.format));
+        }
         if (!options.overwrite && fs::exists(destination)) {
             ++skipped;
             continue;
@@ -304,7 +324,6 @@ int main(int argc, char** argv) {
         return 0;
     }
 
-    std::error_code failure;
     for (const auto& [source, destination] : work) {
         fs::create_directories(destination.parent_path(), failure);
     }
