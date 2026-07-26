@@ -17,45 +17,89 @@
 namespace aiopt {
 
 struct Assignment {
-    std::size_t slot = 0;
+    std::string_view name;
     std::string_view value;
 };
 
-// Recognises the INDEX=VALUE lines the prompt asks for and ignores anything
-// else, so stray prose costs an assignment rather than the whole parse.
+namespace detail {
+
+constexpr void skip_space(std::string_view text, std::size_t& at) noexcept {
+    while (at < text.size() && (text[at] == ' ' || text[at] == '\t' || text[at] == '\n' || text[at] == '\r')) {
+        ++at;
+    }
+}
+
+// Reads a JSON string body, leaving `at` past the closing quote. Escapes are
+// not unescaped: the grammar forbids them inside values, and a path that
+// contained one should reach the specification exactly as written.
+[[nodiscard]] constexpr std::string_view read_string(std::string_view text, std::size_t& at) noexcept {
+    if (at >= text.size() || text[at] != '"') {
+        return {};
+    }
+    const std::size_t begin = ++at;
+    while (at < text.size() && text[at] != '"') {
+        ++at;
+    }
+    const std::string_view body = text.substr(begin, at - begin);
+    if (at < text.size()) {
+        ++at;
+    }
+    return body;
+}
+
+} // namespace detail
+
+// Reads a flat JSON object. The grammar already guarantees well-formedness, so
+// this only has to be careful, not defensive: anything it cannot read is
+// dropped rather than failing the whole parse.
 [[nodiscard]] inline std::vector<Assignment> read_assignments(std::string_view response) {
     std::vector<Assignment> assignments;
-    std::size_t position = 0;
 
-    while (position < response.size()) {
-        const std::size_t line_end = std::min(response.find('\n', position), response.size());
-        const std::string_view line = response.substr(position, line_end - position);
-        position = line_end + 1;
+    std::size_t at = response.find('{');
+    if (at == std::string_view::npos) {
+        return assignments;
+    }
+    ++at;
 
-        const std::size_t separator = line.find('=');
-        if (separator == std::string_view::npos || separator == 0) {
+    while (at < response.size()) {
+        detail::skip_space(response, at);
+        if (at >= response.size() || response[at] == '}') {
+            break;
+        }
+        if (response[at] == ',') {
+            ++at;
             continue;
         }
 
-        std::size_t slot = 0;
-        bool numeric = true;
-        for (const char digit : line.substr(0, separator)) {
-            if (digit < '0' || digit > '9') {
-                numeric = false;
-                break;
+        const std::string_view key = detail::read_string(response, at);
+        if (key.empty()) {
+            break;
+        }
+
+        detail::skip_space(response, at);
+        if (at >= response.size() || response[at] != ':') {
+            break;
+        }
+        ++at;
+        detail::skip_space(response, at);
+        if (at >= response.size()) {
+            break;
+        }
+
+        std::string_view value;
+        if (response[at] == '"') {
+            value = detail::read_string(response, at);
+        } else {
+            const std::size_t begin = at;
+            while (at < response.size() && response[at] != ',' && response[at] != '}' &&
+                   response[at] != ' ' && response[at] != '\n') {
+                ++at;
             }
-            slot = slot * 10 + static_cast<std::size_t>(digit - '0');
-        }
-        if (!numeric) {
-            continue;
+            value = response.substr(begin, at - begin);
         }
 
-        std::string_view value = line.substr(separator + 1);
-        while (!value.empty() && (value.back() == '\r' || value.back() == ' ')) {
-            value.remove_suffix(1);
-        }
         if (!value.empty()) {
-            assignments.push_back(Assignment{slot, value});
+            assignments.push_back(Assignment{key, value});
         }
     }
     return assignments;
@@ -123,7 +167,7 @@ public:
         Outcome<target_type> outcome;
         outcome.response = std::move(response).value();
         for (const Assignment& assignment : read_assignments(outcome.response)) {
-            if (specification_.assign(outcome.options, assignment.slot, assignment.value)) {
+            if (specification_.assign(outcome.options, assignment.name, assignment.value)) {
                 ++outcome.accepted;
             } else {
                 ++outcome.rejected;

@@ -206,6 +206,16 @@ public:
         return assign_at(target, slot, value, std::index_sequence_for<Options...>{});
     }
 
+    [[nodiscard]] bool assign(Struct& target, std::string_view name, std::string_view value) const {
+        const std::array<Descriptor, size> all = descriptors();
+        for (std::size_t i = 0; i < size; ++i) {
+            if (all[i].name == name) {
+                return assign(target, i, value);
+            }
+        }
+        return false;
+    }
+
 private:
     template <std::size_t... I>
     [[nodiscard]] bool assign_at(Struct& target, std::size_t slot, std::string_view value,

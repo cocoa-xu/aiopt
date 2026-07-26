@@ -22,50 +22,58 @@ namespace detail {
     return rule;
 }
 
-[[nodiscard]] inline std::string quote(std::string_view text) {
+[[nodiscard]] inline std::string quoted_literal(std::string_view text) {
     std::string out;
-    out.reserve(text.size() + 2);
-    out += '"';
+    out.reserve(text.size() + 8);
+    out += "\"\\\"\"";
+    out += " \"";
     for (const char character : text) {
         if (character == '"' || character == '\\') {
             out += '\\';
         }
         out += character;
     }
-    out += '"';
+    out += "\" \"\\\"\"";
+    return out;
+}
+
+[[nodiscard]] inline std::string rule_name(std::string_view option) {
+    std::string out = "k-";
+    for (const char character : option) {
+        out += (character == '_' || character == ' ') ? '-' : character;
+    }
     return out;
 }
 
 } // namespace detail
 
-// Produces a GBNF grammar in which every slot carries the value rule implied
-// by its declared type. A boolean slot can only be followed by 0 or 1, an
-// enumeration only by one of its labels, and a slot number outside the
-// specification cannot be written at all.
+// A JSON object keyed by option name. The names are the instruction channel:
+// "quality" tells a model what the field means in a way an ordinal never can,
+// and JSON is the shape models are most heavily trained to emit. Each key
+// carries the value rule implied by its declared type, so a boolean admits
+// only true or false and an enumeration only its own labels.
 [[nodiscard]] inline std::string render_grammar(std::span<const Descriptor> options) {
     std::string out;
-    out.reserve(options.size() * 96 + 256);
+    out.reserve(options.size() * 128 + 256);
 
-    out += "root ::= assignment* \"\\n\"\n";
-    out += "assignment ::=";
+    out += "root ::= \"{\" ws (pair (\",\" ws pair)*)? ws \"}\"\n";
+    out += "ws ::= [ \\t\\n]*\n";
+    out += "pair ::=";
     for (std::size_t i = 0; i < options.size(); ++i) {
-        out += i == 0 ? " a" : " | a";
-        out += std::to_string(i);
+        out += i == 0 ? " " : " | ";
+        out += detail::rule_name(options[i].name);
     }
     out += '\n';
 
-    for (std::size_t i = 0; i < options.size(); ++i) {
-        const Descriptor& option = options[i];
-        const std::string index = std::to_string(i);
-        out += 'a';
-        out += index;
-        out += " ::= \"";
-        out += index;
-        out += "=\" ";
+    for (const Descriptor& option : options) {
+        out += detail::rule_name(option.name);
+        out += " ::= ";
+        out += detail::quoted_literal(option.name);
+        out += " ws \":\" ws ";
 
         switch (option.kind) {
         case Kind::boolean:
-            out += "(\"1\" | \"0\")";
+            out += "(\"true\" | \"false\")";
             break;
         case Kind::integer:
             out += option.bounded() ? detail::digit_run(option.maximum) : std::string{"[0-9] [0-9]? [0-9]?"};
@@ -76,16 +84,16 @@ namespace detail {
                 if (c > 0) {
                     out += " | ";
                 }
-                out += detail::quote(option.choices[c]);
+                out += detail::quoted_literal(option.choices[c]);
             }
             out += ')';
             break;
         case Kind::text:
         case Kind::path:
-            out += "[^\\n]+";
+            out += "\"\\\"\" [^\"\\n]+ \"\\\"\"";
             break;
         }
-        out += " \"\\n\"\n";
+        out += " ws\n";
     }
     return out;
 }
