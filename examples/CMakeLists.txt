@@ -56,9 +56,20 @@ endif()
 # imgproc
 # ---------------------------------------------------------------------------
 
-# stb lives in its own target so the project's warning set is not applied to it.
-add_library(aiopt_stb STATIC third_party/stb_impl.cpp)
-target_include_directories(aiopt_stb PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
+# stb is fetched rather than committed, so its terms stay with its own project
+# and nothing third-party is redistributed here. Pinned to a commit: stb has no
+# releases, and SOURCE_SUBDIR names a directory that does not exist so that
+# CMake populates the headers without looking for a build system.
+include(FetchContent)
+FetchContent_Declare(stb
+    GIT_REPOSITORY https://github.com/nothings/stb.git
+    GIT_TAG 31c1ad37456438565541f4919958214b6e762fb4
+    SOURCE_SUBDIR headers-only)
+FetchContent_MakeAvailable(stb)
+
+# Built as its own target so the project's warning set is not applied to it.
+add_library(aiopt_stb STATIC stb_impl.cpp)
+target_include_directories(aiopt_stb PUBLIC ${stb_SOURCE_DIR})
 if(NOT MSVC)
     target_compile_options(aiopt_stb PRIVATE -w)
 endif()

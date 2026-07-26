@@ -178,11 +178,6 @@ $ ./imgproc shrink example.png by half into small.png
 first build fetches a model, which is a large download; pass `make MODEL=gemma3-270m` for a smaller
 one, or `make MODEL_PATH=/my/own.gguf` to use a file you already have.
 
-```
-$ cd examples
-$ make imgproc
-```
-
 ## Design
 
 An option's description is not documentation, it is the prompt. It is the text the model reads to decide what a request means, and a vague description produces a vague parser. Everything else follows from that.
@@ -344,3 +339,6 @@ address that structurally, and is not implemented yet.
 ## License
 
 `aiopt` is licensed under the MIT License. See [LICENSE](./LICENSE) for more information.
+
+Nothing third-party is redistributed here. llama.cpp and, for the imgproc example, stb are fetched
+by the build under their own licences, and no model weights are included.
