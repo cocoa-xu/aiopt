@@ -122,6 +122,7 @@ struct Options {
     bool recursive = false;
     bool dry_run = false;
     bool overwrite = true;
+    bool verbose = true;
     std::string input;
     std::string output;
     Format format = Format::png;
@@ -137,6 +138,9 @@ constexpr auto specification = aiopt::spec<Options>(
     aiopt::flag(&Options::dry_run, "dry-run", "report what would happen without writing any file"),
     aiopt::flag(&Options::overwrite, "overwrite",
                 "replace files that already exist; false leaves them and skips that image"),
+    aiopt::flag(&Options::verbose, "verbose",
+                "true reports each image as usual; false is quiet, silent, prints nothing at all, "
+                "and produces no output"),
     // Two paths in one request are easy to confuse, so each description says
     // which side of the operation it is. Descriptions are the prompt here.
     aiopt::path(&Options::input, "input", "source image, or a directory of them, to read"),
@@ -317,6 +321,9 @@ void process(const std::filesystem::path& source, const std::filesystem::path& d
     }
 
     ++report.written;
+    if (!options.verbose) {
+        return;
+    }
     const std::lock_guard<std::mutex> held{console};
     std::cout << "  wrote " << destination.string() << "  " << pixels.width() << "x" << pixels.height() << '\n';
 }
@@ -377,6 +384,7 @@ int main(int argc, char** argv) {
         return 0;
     }
 
+    if (options.verbose) {
     std::cout << "understood:\n"
               << "  input       " << (options.input.empty() ? "." : options.input) << '\n'
               << "  output      " << (options.output.empty() ? "(unset)" : options.output) << '\n'
@@ -389,6 +397,7 @@ int main(int argc, char** argv) {
               << "  overwrite   " << options.overwrite << '\n'
               << "  dry-run     " << options.dry_run << '\n'
               << "  jobs        " << options.jobs << "\n\n";
+    }
 
     if (options.output.empty()) {
         std::cerr << "imgproc: no output location was named, so there is nothing to write\n";
@@ -408,8 +417,10 @@ int main(int argc, char** argv) {
 
     const std::vector<fs::path> files = collect(source_root, options.recursive);
     if (files.empty()) {
-        std::cout << (one_image ? "not an image this program can read: " : "no images found under ")
-                  << source_root.string() << '\n';
+        if (options.verbose) {
+            std::cout << (one_image ? "not an image this program can read: " : "no images found under ")
+                      << source_root.string() << '\n';
+        }
         return one_image ? 1 : 0;
     }
 
@@ -434,17 +445,21 @@ int main(int argc, char** argv) {
         work.emplace_back(file, destination);
     }
 
-    std::cout << files.size() << " image(s) found, " << work.size() << " to process";
-    if (skipped > 0) {
-        std::cout << ", " << skipped << " left alone because they already exist";
+    if (options.verbose) {
+        std::cout << files.size() << " image(s) found, " << work.size() << " to process";
+        if (skipped > 0) {
+            std::cout << ", " << skipped << " left alone because they already exist";
+        }
+        std::cout << "\n\n";
     }
-    std::cout << "\n\n";
 
     if (options.dry_run) {
-        for (const auto& [source, destination] : work) {
-            std::cout << "  would write " << destination.string() << '\n';
+        if (options.verbose) {
+            for (const auto& [source, destination] : work) {
+                std::cout << "  would write " << destination.string() << '\n';
+            }
+            std::cout << "\ndry run, nothing was written\n";
         }
-        std::cout << "\ndry run, nothing was written\n";
         return 0;
     }
 
@@ -471,6 +486,8 @@ int main(int argc, char** argv) {
         thread.join();
     }
 
-    std::cout << "\nwrote " << report.written << ", failed " << report.failed << '\n';
+    if (options.verbose) {
+        std::cout << "\nwrote " << report.written << ", failed " << report.failed << '\n';
+    }
     return report.failed > 0 ? 1 : 0;
 }
