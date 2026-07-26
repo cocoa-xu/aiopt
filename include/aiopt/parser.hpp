@@ -127,9 +127,10 @@ public:
 
         const auto descriptors = specification.descriptors();
         std::string instructions = render_prefix(descriptors);
+        std::string grammar = render_grammar(descriptors);
         Engine owned = std::move(engine).value();
 
-        if (const Status status = owned.use_grammar(render_grammar(descriptors)); status != Status::ok) {
+        if (const Status status = owned.use_grammar(grammar); status != Status::ok) {
             return Error{status};
         }
 
@@ -147,19 +148,13 @@ public:
         if (const Status status = owned.prime(prefix); status != Status::ok) {
             return Error{status};
         }
-        return Parser{std::move(specification), std::move(owned), std::move(prefix), std::move(instructions), chat};
+        return Parser{std::move(specification), std::move(owned), std::move(prefix), std::move(instructions),
+                      std::move(grammar), chat};
     }
 
     [[nodiscard]] Result<Outcome<target_type>> parse(std::string_view command_line, int max_tokens = 64) {
-        std::string request;
-        if (chat_) {
-            const std::string full = apply_chat_template(engine_.model(), instructions_, command_line, true);
-            request = full.substr(std::min(prefix_.size(), full.size()));
-        } else {
-            request = render_request(command_line);
-        }
-
-        Result<std::string> response = engine_.complete(request, max_tokens);
+        Result<std::string> response =
+            engine_.complete(chat_ ? request_for(command_line) : render_request(command_line), max_tokens);
         if (!response) {
             return response.error();
         }
@@ -176,18 +171,66 @@ public:
         return outcome;
     }
 
+    // Example requests for help text, written by the model against the same
+    // specification it parses with. Uses a grammar of its own, since the answer
+    // here is prose rather than an options object, and puts the parsing grammar
+    // back before returning.
+    [[nodiscard]] Result<std::vector<std::string>> suggest(std::size_t count = 3, int max_tokens = 192) {
+        if (const Status status = engine_.use_grammar(render_suggestions_grammar(count));
+            status != Status::ok) {
+            return Error{status};
+        }
+
+        Result<std::string> response = engine_.complete(request_for(render_suggestion_request(count)),
+                                                        max_tokens);
+
+        if (const Status status = engine_.use_grammar(grammar_); status != Status::ok) {
+            return Error{status};
+        }
+        if (!response) {
+            return response.error();
+        }
+
+        std::vector<std::string> examples;
+        const std::string text = std::move(response).value();
+        for (std::size_t at = 0; at < text.size();) {
+            const std::size_t end = std::min(text.find('\n', at), text.size());
+            std::string_view line{text.data() + at, end - at};
+            at = end + 1;
+            if (line.starts_with("- ")) {
+                line.remove_prefix(2);
+            }
+            while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) {
+                line.remove_suffix(1);
+            }
+            if (!line.empty()) {
+                examples.emplace_back(line);
+            }
+        }
+        return examples;
+    }
+
     [[nodiscard]] const std::string& prefix() const noexcept { return prefix_; }
 
 private:
     Parser(SpecType specification, Engine engine, std::string prefix, std::string instructions,
-           bool chat) noexcept
+           std::string grammar, bool chat) noexcept
         : specification_{std::move(specification)}, engine_{std::move(engine)}, prefix_{std::move(prefix)},
-          instructions_{std::move(instructions)}, chat_{chat} {}
+          instructions_{std::move(instructions)}, grammar_{std::move(grammar)}, chat_{chat} {}
+
+    [[nodiscard]] std::string request_for(std::string_view body) const {
+        if (!chat_) {
+            return std::string{body};
+        }
+        const std::string full = apply_chat_template(engine_.model(), instructions_, body, true);
+        return full.substr(std::min(prefix_.size(), full.size()));
+    }
 
     SpecType specification_;
     Engine engine_;
     std::string prefix_;
     std::string instructions_;
+    std::string grammar_;
     bool chat_ = false;
 };
 

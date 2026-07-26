@@ -57,10 +57,36 @@
     "Never paraphrase and never invent a value.\n"
 #endif
 
+// Governs the example requests shown in help. Override it to change their
+// flavour, for instance to ask for examples in a particular language.
+#ifndef AIOPT_EXAMPLES_PROMPT
+#define AIOPT_EXAMPLES_PROMPT                                                            \
+    "Now write example requests a person could type to run this program.\n"              \
+    "Put each on its own line beginning with \"- \".\n"                                  \
+    "Use only the keys listed above, and have each example use a different mix\n"        \
+    "of them. Write natural sentences, not JSON. Keep each under twelve words.\n"
+#endif
+
 namespace aiopt {
 
 [[nodiscard]] constexpr std::string_view default_system_prompt() noexcept {
     return AIOPT_SYSTEM_PROMPT;
+}
+
+[[nodiscard]] constexpr std::string_view default_examples_prompt() noexcept {
+    return AIOPT_EXAMPLES_PROMPT;
+}
+
+[[nodiscard]] inline std::string render_suggestion_request(std::size_t count,
+                                                           std::string_view instructions =
+                                                               default_examples_prompt()) {
+    std::string out;
+    out.reserve(instructions.size() + 64);
+    out += instructions;
+    out += "Write exactly ";
+    out += std::to_string(count);
+    out += " of them.\n";
+    return out;
 }
 
 namespace detail {

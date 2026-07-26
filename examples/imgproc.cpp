@@ -19,6 +19,7 @@
 #include <filesystem>
 #include <iostream>
 #include <mutex>
+#include <span>
 #include <cctype>
 #include <string>
 #include <thread>
@@ -194,21 +195,23 @@ void process(const std::filesystem::path& source, const std::filesystem::path& d
 #error "AIOPT_MODEL_PATH must be defined by the build; see examples/CMakeLists.txt"
 #endif
 
-const std::array<std::string_view, 3> examples{
+constexpr std::string_view summary = "convert and resize images, described in plain language";
+
+// Used when no model has been loaded, which is the case for a bare invocation.
+const std::array<std::string_view, 3> fallback_examples{
     "convert images from ./photos to ./out as jpg at quality 80",
     "recursively shrink ./assets to ./web, nothing wider than 1024",
     "show me what would happen, do not write anything yet",
 };
 
-void print_help() {
-    std::cout << aiopt::render_help(specification.descriptors(), "imgproc",
-                                    "convert and resize images, described in plain language", examples);
+void print_help(std::span<const std::string_view> examples) {
+    std::cout << aiopt::render_help(specification.descriptors(), "imgproc", summary, examples);
 }
 
 int main(int argc, char** argv) {
     // Asking for nothing is unambiguous, so answer it without loading a model.
     if (argc < 2) {
-        print_help();
+        print_help(fallback_examples);
         return 0;
     }
 
@@ -230,7 +233,15 @@ int main(int argc, char** argv) {
 
     const Options& options = outcome->options;
     if (options.help) {
-        print_help();
+        // The model is already loaded and already knows the options, so let it
+        // write the examples rather than shipping a list that goes stale.
+        auto suggested = parser.suggest();
+        if (suggested && !suggested->empty()) {
+            std::vector<std::string_view> examples{suggested->begin(), suggested->end()};
+            print_help(examples);
+        } else {
+            print_help(fallback_examples);
+        }
         return 0;
     }
 

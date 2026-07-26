@@ -98,6 +98,18 @@ namespace detail {
     return out;
 }
 
+// Example requests are prose rather than an options object, so they need a
+// grammar of their own: exactly `count` lines, each opening with a dash. The
+// shape is fixed while the wording stays free.
+[[nodiscard]] inline std::string render_suggestions_grammar(std::size_t count) {
+    std::string out = "root ::=";
+    for (std::size_t i = 0; i < count; ++i) {
+        out += " item";
+    }
+    out += "\nitem ::= \"- \" [^\\n]+ \"\\n\"\n";
+    return out;
+}
+
 } // namespace aiopt
 
 #endif
