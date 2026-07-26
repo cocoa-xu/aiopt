@@ -1,0 +1,4 @@
+add_executable(aiopt_correctness correctness.cpp)
+target_link_libraries(aiopt_correctness PRIVATE aiopt::aiopt aiopt_strict)
+target_include_directories(aiopt_correctness PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(aiopt_correctness PROPERTIES OUTPUT_NAME correctness)
