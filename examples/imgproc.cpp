@@ -131,10 +131,13 @@ struct Options {
     int quality = 85;
     int max_width = 0;
     int jobs = 1;
+    int examples = 3;
 };
 
 constexpr auto specification = aiopt::spec<Options>(
-    aiopt::flag(&Options::help, "help", "the request is asking what this program can do, not asking for work"),
+    aiopt::flag(&Options::help, "help",
+                "the request asks what this program can do, how to use it, or for examples of using "
+                "it, rather than asking for work to be done"),
     aiopt::flag(&Options::recursive, "recursive", "descend into subdirectories when collecting inputs"),
     aiopt::flag(&Options::dry_run, "dry-run", "report what would happen without writing any file"),
     aiopt::flag(&Options::overwrite, "overwrite",
@@ -153,7 +156,13 @@ constexpr auto specification = aiopt::spec<Options>(
     aiopt::number(&Options::max_width, "max-width",
                   "shrink only images wider than this, keeping their shape; ignored when resize is set", 0,
                   16384),
-    aiopt::number(&Options::jobs, "jobs", "number of images to process at once", 1, 64));
+    aiopt::number(&Options::jobs, "jobs", "number of images to process at once", 1, 64),
+    // How many examples to show is part of asking for help, so it is declared
+    // like anything else rather than fixed in the code.
+    aiopt::number(&Options::examples, "examples",
+                  "how many usage examples to show; a request asking for examples is asking for "
+                  "help, so set help to true whenever this is set",
+                  1, 10));
 
 [[nodiscard]] std::string describe(const Resize& resize) {
     switch (resize.mode) {
@@ -378,7 +387,8 @@ int main(int argc, char** argv) {
         // fresh seed each run makes it visible that these are written rather
         // than recited; parsing keeps its deterministic sampler.
         std::random_device entropy;
-        auto suggested = parser.suggest(3, aiopt::Sampling{0.9f, 0.95f, entropy()});
+        auto suggested = parser.suggest(static_cast<std::size_t>(options.examples),
+                                        aiopt::Sampling{0.9f, 0.95f, entropy()});
         if (suggested && !suggested->empty()) {
             std::vector<std::string_view> examples{suggested->begin(), suggested->end()};
             print_help(examples);
