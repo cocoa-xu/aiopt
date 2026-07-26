@@ -1,8 +1,11 @@
 // A complete aiopt program that does real work: declare the options once, then
 // accept the command line as ordinary prose.
 //
-//   ./imgproc "convert images from ./photos to ./out as jpg at quality 80"
+//   ./imgproc convert images from ./photos to ./out as jpg at quality 80
 //   ./imgproc "recursively shrink ./assets into ./web, max width 1024"
+//
+// Quoting is optional; the words are joined back together. It is still worth
+// quoting a request containing ? or *, which a shell would try to expand.
 //
 // The model is chosen when the program is built, not when it is run, so a user
 // never has to know one is involved. See AIOPT_EXAMPLE_MODEL in the CMake file.
@@ -366,6 +369,17 @@ int main(int argc, char** argv) {
         return 0;
     }
 
+    // The request is prose, so the shell splitting it on spaces loses nothing.
+    // Quoting it keeps punctuation the shell would otherwise eat, but it should
+    // not be required.
+    std::string request;
+    for (int i = 1; i < argc; ++i) {
+        if (i > 1) {
+            request += ' ';
+        }
+        request += argv[i];
+    }
+
     aiopt::EngineOptions engine;
     engine.threads = 10;
 
@@ -376,7 +390,7 @@ int main(int argc, char** argv) {
     }
     auto parser = std::move(created).value();
 
-    auto outcome = parser.parse(argv[1]);
+    auto outcome = parser.parse(request);
     if (!outcome) {
         std::cerr << "imgproc: " << outcome.error().detail() << '\n';
         return 1;
@@ -392,7 +406,7 @@ int main(int argc, char** argv) {
         // it was written in.
         std::random_device entropy;
         auto suggested = parser.suggest(aiopt::Suggestions{static_cast<std::size_t>(options.examples),
-                                                           argv[1],
+                                                           request,
                                                            {0.75f, 0.92f, entropy()},
                                                            256});
         if (suggested && !suggested->empty()) {
